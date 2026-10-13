@@ -1,0 +1,604 @@
+#!/bin/sh
+
+PATH=/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+IQ_SCRIPT="/opt/bin/internet_quota.sh"
+IQ_CONFIG_DIR="/opt/etc/internet_quota"
+IQ_CONFIG_FILE="$IQ_CONFIG_DIR/internet_quota.conf"
+IQ_STATE_FILE="$IQ_CONFIG_DIR/internet_quota.state"
+IQ_PID_FILE="$IQ_CONFIG_DIR/internet_quota.pid"
+
+
+# ============================================================
+# Utility functions
+# ============================================================
+
+iq_usage()
+{
+    echo "Usage:"
+    echo "  $0 start"
+    echo "  $0 stop"
+    echo "  $0 restart"
+    echo "  $0 status"
+    echo "  $0 config"
+    echo "  $0 reset"
+    echo "  $0 set-mac XX:XX:XX:XX:XX:XX"
+    echo "  $0 help"
+}
+
+
+iq_is_running()
+{
+    if [ ! -f "$IQ_PID_FILE" ]; then
+        return 1
+    fi
+
+    IQ_PID=$(cat "$IQ_PID_FILE" 2>/dev/null)
+
+    if [ -z "$IQ_PID" ]; then
+        return 1
+    fi
+
+    kill -0 "$IQ_PID" 2>/dev/null
+}
+
+
+# ============================================================
+# Start
+# ============================================================
+
+iq_start()
+{
+    if [ ! -f "$IQ_SCRIPT" ]; then
+        echo "ERROR: Script not found: $IQ_SCRIPT"
+        return 1
+    fi
+
+    if [ ! -f "$IQ_CONFIG_FILE" ]; then
+        echo "ERROR: Config file not found: $IQ_CONFIG_FILE"
+        return 1
+    fi
+
+    if iq_is_running; then
+        IQ_PID=$(cat "$IQ_PID_FILE")
+        echo "internet_quota already running (PID $IQ_PID)"
+        return 0
+    fi
+
+    rm -f "$IQ_PID_FILE"
+
+    echo "Starting internet_quota..."
+
+    "$IQ_SCRIPT" >/dev/null 2>&1 &
+
+    IQ_START_PID=$!
+
+    sleep 1
+
+    if iq_is_running; then
+        IQ_PID=$(cat "$IQ_PID_FILE")
+        echo "internet_quota started (PID $IQ_PID)"
+        return 0
+    fi
+
+    if kill -0 "$IQ_START_PID" 2>/dev/null; then
+        echo "internet_quota process started (PID $IQ_START_PID)"
+        return 0
+    fi
+
+    echo "ERROR: Failed to start internet_quota"
+    return 1
+}
+
+
+# ============================================================
+# Stop
+# ============================================================
+
+iq_stop()
+{
+    if ! iq_is_running; then
+
+        rm -f "$IQ_PID_FILE"
+
+        echo "internet_quota is not running"
+
+        return 0
+    fi
+
+    IQ_PID=$(cat "$IQ_PID_FILE" 2>/dev/null)
+
+    echo "Stopping internet_quota (PID $IQ_PID)..."
+
+    kill "$IQ_PID" 2>/dev/null
+
+
+    IQ_COUNT=0
+
+    while kill -0 "$IQ_PID" 2>/dev/null
+    do
+        sleep 1
+
+        IQ_COUNT=$((IQ_COUNT + 1))
+
+        if [ "$IQ_COUNT" -ge 5 ]; then
+            break
+        fi
+    done
+
+
+    if kill -0 "$IQ_PID" 2>/dev/null; then
+        echo "Process did not stop gracefully, sending SIGKILL..."
+        kill -9 "$IQ_PID" 2>/dev/null
+        sleep 1
+    fi
+
+
+    rm -f "$IQ_PID_FILE"
+
+    echo "internet_quota stopped"
+}
+
+
+# ============================================================
+# Restart
+# ============================================================
+
+iq_restart()
+{
+    iq_stop
+    iq_start
+}
+
+
+# ============================================================
+# Status
+# ============================================================
+
+iq_status()
+{
+    if iq_is_running; then
+
+        IQ_PID=$(cat "$IQ_PID_FILE")
+
+        echo "internet_quota is running (PID $IQ_PID)"
+
+        return 0
+    fi
+
+    echo "internet_quota is not running"
+
+    return 1
+}
+
+
+# ============================================================
+# Format time
+# ============================================================
+
+iq_format_time()
+{
+    IQ_TOTAL="$1"
+
+    IQ_HOURS=$((IQ_TOTAL / 3600))
+    IQ_MINUTES=$(((IQ_TOTAL % 3600) / 60))
+    IQ_SECONDS=$((IQ_TOTAL % 60))
+
+    printf "%02d:%02d:%02d" \
+        "$IQ_HOURS" \
+        "$IQ_MINUTES" \
+        "$IQ_SECONDS"
+}
+
+
+# ============================================================
+# Config information
+# ============================================================
+
+iq_config()
+{
+    if [ ! -f "$IQ_CONFIG_FILE" ]; then
+        echo "ERROR: Config file not found: $IQ_CONFIG_FILE"
+        return 1
+    fi
+
+    . "$IQ_CONFIG_FILE"
+
+
+    # --------------------------------------------------------
+    # Read current quota state
+    # --------------------------------------------------------
+
+    IQ_STATE_DATE=""
+    IQ_ACTIVE_TIME=0
+    IQ_BLOCKED=0
+
+    if [ -f "$IQ_STATE_FILE" ]; then
+
+        # Clear possible variables from previous environment
+        unset DATE
+        unset ACTIVE_TIME
+        unset BLOCKED
+
+        . "$IQ_STATE_FILE"
+
+        # State file format:
+        #
+        # DATE=YYYY-MM-DD
+        # ACTIVE_TIME=seconds
+        # BLOCKED=0|1
+
+        IQ_STATE_DATE=${DATE:-}
+        IQ_ACTIVE_TIME=${ACTIVE_TIME:-0}
+        IQ_BLOCKED=${BLOCKED:-0}
+    fi
+
+
+    # --------------------------------------------------------
+    # Validate state values
+    # --------------------------------------------------------
+
+    case "$IQ_ACTIVE_TIME" in
+        ''|*[!0-9]*)
+            IQ_ACTIVE_TIME=0
+            ;;
+    esac
+
+    case "$IQ_BLOCKED" in
+        0|1)
+            ;;
+        *)
+            IQ_BLOCKED=0
+            ;;
+    esac
+
+
+    # --------------------------------------------------------
+    # Check current date
+    # --------------------------------------------------------
+
+    IQ_TODAY=$(date '+%Y-%m-%d')
+
+
+    # State from previous day is not current usage.
+    if [ "$IQ_STATE_DATE" != "$IQ_TODAY" ]; then
+        IQ_ACTIVE_TIME=0
+        IQ_BLOCKED=0
+    fi
+
+
+    # --------------------------------------------------------
+    # Calculate remaining quota
+    # --------------------------------------------------------
+
+    IQ_REMAINING=$((DAILY_LIMIT - IQ_ACTIVE_TIME))
+
+    if [ "$IQ_REMAINING" -lt 0 ]; then
+        IQ_REMAINING=0
+    fi
+
+
+    # --------------------------------------------------------
+    # Service status
+    # --------------------------------------------------------
+
+    if iq_is_running; then
+        IQ_SERVICE_STATUS="RUNNING"
+    else
+        IQ_SERVICE_STATUS="STOPPED"
+    fi
+
+
+    # --------------------------------------------------------
+    # Internet status
+    # --------------------------------------------------------
+
+    if [ "$IQ_BLOCKED" -eq 1 ]; then
+        IQ_INTERNET_STATUS="BLOCKED"
+    else
+        IQ_INTERNET_STATUS="ALLOWED"
+    fi
+
+
+    # --------------------------------------------------------
+    # Display
+    # --------------------------------------------------------
+
+    echo "Internet quota configuration"
+    echo
+    echo "Config directory : $IQ_CONFIG_DIR"
+    echo "MAC              : $MAC"
+    echo "Interval         : $INTERVAL sec"
+    echo "Active threshold : $ACTIVE_THRESHOLD bytes"
+    echo "Daily limit      : $(iq_format_time "$DAILY_LIMIT")"
+    echo "Active time      : $(iq_format_time "$IQ_ACTIVE_TIME")"
+    echo "Remaining        : $(iq_format_time "$IQ_REMAINING")"
+    echo "Service status   : $IQ_SERVICE_STATUS"
+    echo "Internet status  : $IQ_INTERNET_STATUS"
+    echo "Blocked          : $IQ_BLOCKED"
+}
+
+
+# ============================================================
+# Reset daily quota
+# ============================================================
+
+iq_reset()
+{
+    if [ ! -f "$IQ_CONFIG_FILE" ]; then
+        echo "ERROR: Config file not found: $IQ_CONFIG_FILE"
+        return 1
+    fi
+
+    . "$IQ_CONFIG_FILE"
+
+
+    IQ_STATE_DATE=$(date '+%Y-%m-%d')
+    IQ_ACTIVE_TIME=0
+    IQ_BLOCKED=0
+
+
+    if [ -f "$IQ_STATE_FILE" ]; then
+
+        IQ_OLD_STATE_DATE=""
+        IQ_OLD_ACTIVE_TIME=0
+        IQ_OLD_BLOCKED=0
+
+        . "$IQ_STATE_FILE"
+
+        if [ "$IQ_OLD_BLOCKED" -eq 1 ]; then
+            echo "Removing NoInternet policy from $MAC..."
+            ndmc -c "no ip hotspot host $MAC policy" >/dev/null 2>&1
+        fi
+    else
+        # Make sure the device is not blocked.
+        ndmc -c "no ip hotspot host $MAC policy" >/dev/null 2>&1
+    fi
+
+
+    IQ_TMP_STATE="${IQ_STATE_FILE}.tmp"
+
+    {
+        echo "DATE=$IQ_STATE_DATE"
+        echo "ACTIVE_TIME=0"
+        echo "BLOCKED=0"
+    } > "$IQ_TMP_STATE"
+
+    mv "$IQ_TMP_STATE" "$IQ_STATE_FILE"
+
+
+    echo "Internet quota has been reset."
+    echo "Active time : 00:00:00"
+    echo "Remaining   : $(iq_format_time "$DAILY_LIMIT")"
+}
+
+
+# ============================================================
+# Set MAC address
+# ============================================================
+
+iq_set_mac()
+{
+    IQ_NEW_MAC="$1"
+
+
+    if [ -z "$IQ_NEW_MAC" ]; then
+        echo "ERROR: MAC address is required"
+        echo "Usage: $0 set-mac XX:XX:XX:XX:XX:XX"
+        return 1
+    fi
+
+
+    echo "$IQ_NEW_MAC" | awk '
+    $0 ~ /^[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]$/ {
+        valid=1
+    }
+    END {
+        exit !valid
+    }'
+
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Invalid MAC address: $IQ_NEW_MAC"
+        return 1
+    fi
+
+
+    if [ ! -f "$IQ_CONFIG_FILE" ]; then
+        echo "ERROR: Config file not found: $IQ_CONFIG_FILE"
+        return 1
+    fi
+
+
+    . "$IQ_CONFIG_FILE"
+
+
+    if [ "$MAC" = "$IQ_NEW_MAC" ]; then
+        echo "MAC is already set to $IQ_NEW_MAC"
+        return 0
+    fi
+
+
+    IQ_OLD_MAC="$MAC"
+
+
+    # --------------------------------------------------------
+    # Read old state before stopping the service
+    # --------------------------------------------------------
+
+    IQ_OLD_BLOCKED=0
+
+    if [ -f "$IQ_STATE_FILE" ]; then
+
+        IQ_STATE_DATE=""
+        IQ_ACTIVE_TIME=0
+        IQ_OLD_BLOCKED=0
+
+        . "$IQ_STATE_FILE"
+    fi
+
+
+    # --------------------------------------------------------
+    # Stop service
+    # --------------------------------------------------------
+
+    if iq_is_running; then
+        iq_stop
+    fi
+
+
+    # --------------------------------------------------------
+    # Remove blocking from old device
+    # --------------------------------------------------------
+
+    if [ "$IQ_OLD_BLOCKED" -eq 1 ]; then
+
+        echo "Removing NoInternet policy from old device $IQ_OLD_MAC..."
+
+        ndmc -c "no ip hotspot host $IQ_OLD_MAC policy" >/dev/null 2>&1
+    fi
+
+
+    # --------------------------------------------------------
+    # Update configuration
+    # --------------------------------------------------------
+
+    IQ_TMP_CONFIG="${IQ_CONFIG_FILE}.tmp"
+
+    sed "s/^MAC=.*/MAC=\"$IQ_NEW_MAC\"/" \
+        "$IQ_CONFIG_FILE" > "$IQ_TMP_CONFIG"
+
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Failed to create new config"
+        rm -f "$IQ_TMP_CONFIG"
+        return 1
+    fi
+
+
+    mv "$IQ_TMP_CONFIG" "$IQ_CONFIG_FILE"
+
+
+    # --------------------------------------------------------
+    # Verify configuration
+    # --------------------------------------------------------
+
+    unset MAC
+    . "$IQ_CONFIG_FILE"
+
+
+    if [ "$MAC" != "$IQ_NEW_MAC" ]; then
+        echo "ERROR: Failed to update MAC"
+        return 1
+    fi
+
+
+    # --------------------------------------------------------
+    # Create fresh state for new device
+    # --------------------------------------------------------
+
+    IQ_TODAY=$(date '+%Y-%m-%d')
+
+    IQ_TMP_STATE="${IQ_STATE_FILE}.tmp"
+
+    {
+        echo "DATE=$IQ_TODAY"
+        echo "ACTIVE_TIME=0"
+        echo "BLOCKED=0"
+    } > "$IQ_TMP_STATE"
+
+    mv "$IQ_TMP_STATE" "$IQ_STATE_FILE"
+
+
+    echo "MAC changed successfully."
+    echo "Old MAC : $IQ_OLD_MAC"
+    echo "New MAC : $IQ_NEW_MAC"
+
+
+    # --------------------------------------------------------
+    # Start service
+    # --------------------------------------------------------
+
+    iq_start
+}
+
+
+# ============================================================
+# Help
+# ============================================================
+
+iq_help()
+{
+    echo "Internet quota service"
+    echo
+    echo "Usage:"
+    echo "  $0 start"
+    echo "      Start Internet quota monitoring"
+    echo
+    echo "  $0 stop"
+    echo "      Stop Internet quota monitoring"
+    echo
+    echo "  $0 restart"
+    echo "      Restart Internet quota monitoring"
+    echo
+    echo "  $0 status"
+    echo "      Show service status"
+    echo
+    echo "  $0 config"
+    echo "      Show current configuration and quota status"
+    echo
+    echo "  $0 reset"
+    echo "      Reset today's active Internet time"
+    echo
+    echo "  $0 set-mac XX:XX:XX:XX:XX:XX"
+    echo "      Change monitored device MAC"
+    echo
+    echo "  $0 help"
+    echo "      Show this help"
+}
+
+
+# ============================================================
+# Main
+# ============================================================
+
+case "$1" in
+
+    start)
+        iq_start
+        ;;
+
+    stop)
+        iq_stop
+        ;;
+
+    restart)
+        iq_restart
+        ;;
+
+    status)
+        iq_status
+        ;;
+
+    config)
+        iq_config
+        ;;
+
+    reset)
+        iq_reset
+        ;;
+
+    set-mac)
+        iq_set_mac "$2"
+        ;;
+
+    help|"")
+        iq_help
+        ;;
+
+    *)
+        echo "ERROR: Unknown command: $1"
+        echo
+        iq_help
+        exit 1
+        ;;
+
+esac

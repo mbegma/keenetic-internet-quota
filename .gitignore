@@ -1,0 +1,8 @@
+# Runtime state and process files
+opt/etc/internet_quota/internet_quota.state
+opt/etc/internet_quota/internet_quota.state.tmp
+opt/etc/internet_quota/internet_quota.pid
+opt/etc/internet_quota/*.log
+opt/etc/internet_web/*.pid
+opt/etc/internet_web/*.log
+opt/etc/internet_web/*.tmp

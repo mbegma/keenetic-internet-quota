@@ -1,0 +1,328 @@
+#!/bin/sh
+
+# ============================================================
+# Internet Web Interface service
+# ============================================================
+
+PATH=/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+WEB_CONFIG_DIR="/opt/etc/internet_web"
+WEB_CONFIG_FILE="$WEB_CONFIG_DIR/internet_web.conf"
+WEB_LIGHTTPD_CONFIG="$WEB_CONFIG_DIR/lighttpd.conf"
+WEB_PID_FILE="$WEB_CONFIG_DIR/lighttpd.pid"
+
+
+# ============================================================
+# Usage
+# ============================================================
+
+web_usage()
+{
+    echo "Usage:"
+    echo "  $0 start"
+    echo "  $0 stop"
+    echo "  $0 restart"
+    echo "  $0 status"
+    echo "  $0 config"
+    echo "  $0 help"
+}
+
+
+# ============================================================
+# Check whether lighttpd is running
+# ============================================================
+
+web_is_running()
+{
+    if [ ! -f "$WEB_PID_FILE" ]; then
+        return 1
+    fi
+
+    WEB_PID=$(cat "$WEB_PID_FILE" 2>/dev/null)
+
+    if [ -z "$WEB_PID" ]; then
+        return 1
+    fi
+
+    kill -0 "$WEB_PID" 2>/dev/null
+}
+
+
+# ============================================================
+# Start
+# ============================================================
+
+web_start()
+{
+    # --------------------------------------------------------
+    # Already running
+    # --------------------------------------------------------
+
+    if web_is_running; then
+
+        WEB_PID=$(cat "$WEB_PID_FILE")
+
+        echo "internet_web already running (PID $WEB_PID)"
+
+        return 0
+    fi
+
+
+    # --------------------------------------------------------
+    # Check lighttpd
+    # --------------------------------------------------------
+
+    if [ ! -x /opt/sbin/lighttpd ]; then
+
+        echo "ERROR: lighttpd not found:"
+        echo "       /opt/sbin/lighttpd"
+
+        return 1
+    fi
+
+
+    # --------------------------------------------------------
+    # Check configuration files
+    # --------------------------------------------------------
+
+    if [ ! -f "$WEB_CONFIG_FILE" ]; then
+
+        echo "ERROR: Web configuration not found:"
+        echo "       $WEB_CONFIG_FILE"
+
+        return 1
+    fi
+
+
+    if [ ! -f "$WEB_LIGHTTPD_CONFIG" ]; then
+
+        echo "ERROR: lighttpd configuration not found:"
+        echo "       $WEB_LIGHTTPD_CONFIG"
+
+        return 1
+    fi
+
+
+    # --------------------------------------------------------
+    # Validate lighttpd configuration
+    # --------------------------------------------------------
+
+    echo "Checking lighttpd configuration..."
+
+    if ! /opt/sbin/lighttpd -tt -f "$WEB_LIGHTTPD_CONFIG"; then
+
+        echo "ERROR: Invalid lighttpd configuration"
+
+        return 1
+    fi
+
+
+    # --------------------------------------------------------
+    # Start lighttpd
+    # --------------------------------------------------------
+
+    echo "Starting internet_web..."
+
+    /opt/sbin/lighttpd -f "$WEB_LIGHTTPD_CONFIG"
+
+    sleep 1
+
+
+    # --------------------------------------------------------
+    # Verify startup
+    # --------------------------------------------------------
+
+    if web_is_running; then
+
+        WEB_PID=$(cat "$WEB_PID_FILE")
+
+        echo "internet_web started (PID $WEB_PID)"
+        echo "Web interface:"
+        echo "http://192.168.1.1:8080"
+
+        return 0
+    fi
+
+
+    echo "ERROR: Failed to start internet_web"
+
+    return 1
+}
+
+
+# ============================================================
+# Stop
+# ============================================================
+
+web_stop()
+{
+    if ! web_is_running; then
+
+        rm -f "$WEB_PID_FILE"
+
+        echo "internet_web is not running"
+
+        return 0
+    fi
+
+
+    WEB_PID=$(cat "$WEB_PID_FILE")
+
+    echo "Stopping internet_web (PID $WEB_PID)..."
+
+
+    kill "$WEB_PID" 2>/dev/null
+
+
+    WEB_COUNT=0
+
+    while kill -0 "$WEB_PID" 2>/dev/null
+    do
+
+        sleep 1
+
+        WEB_COUNT=$((WEB_COUNT + 1))
+
+        if [ "$WEB_COUNT" -ge 5 ]; then
+            break
+        fi
+
+    done
+
+
+    # --------------------------------------------------------
+    # Force stop if necessary
+    # --------------------------------------------------------
+
+    if kill -0 "$WEB_PID" 2>/dev/null; then
+
+        echo "Process did not stop gracefully."
+        echo "Sending SIGKILL..."
+
+        kill -9 "$WEB_PID" 2>/dev/null
+
+        sleep 1
+    fi
+
+
+    rm -f "$WEB_PID_FILE"
+
+    echo "internet_web stopped"
+}
+
+
+# ============================================================
+# Restart
+# ============================================================
+
+web_restart()
+{
+    web_stop
+    web_start
+}
+
+
+# ============================================================
+# Status
+# ============================================================
+
+web_status()
+{
+    if web_is_running; then
+
+        WEB_PID=$(cat "$WEB_PID_FILE")
+
+        echo "internet_web is running (PID $WEB_PID)"
+        echo "Web interface: http://192.168.1.1:8080"
+
+        return 0
+    fi
+
+
+    echo "internet_web is not running"
+
+    return 1
+}
+
+
+# ============================================================
+# Configuration information
+# ============================================================
+
+web_config()
+{
+    if [ ! -f "$WEB_CONFIG_FILE" ]; then
+
+        echo "ERROR: Config file not found:"
+        echo "       $WEB_CONFIG_FILE"
+
+        return 1
+    fi
+
+
+    . "$WEB_CONFIG_FILE"
+
+
+    echo "Internet Web Interface"
+    echo
+    echo "Config directory : $WEB_CONFIG_DIR"
+    echo "Bind address     : $WEB_BIND"
+    echo "Port             : $WEB_PORT"
+    echo "URL              : http://$WEB_BIND:$WEB_PORT"
+    echo "Document root    : $WEB_DOC_ROOT"
+    echo "CGI directory    : $WEB_CGI_DIR"
+
+
+    if web_is_running; then
+
+        WEB_PID=$(cat "$WEB_PID_FILE")
+
+        echo "Service status   : RUNNING"
+        echo "PID              : $WEB_PID"
+
+    else
+
+        echo "Service status   : STOPPED"
+
+    fi
+}
+
+
+# ============================================================
+# Main
+# ============================================================
+
+case "$1" in
+
+    start)
+        web_start
+        ;;
+
+    stop)
+        web_stop
+        ;;
+
+    restart)
+        web_restart
+        ;;
+
+    status)
+        web_status
+        ;;
+
+    config)
+        web_config
+        ;;
+
+    help|"")
+        web_usage
+        ;;
+
+    *)
+        echo "ERROR: Unknown command: $1"
+        echo
+        web_usage
+        exit 1
+        ;;
+
+esac
