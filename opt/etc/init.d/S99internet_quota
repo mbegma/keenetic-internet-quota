@@ -319,6 +319,7 @@ iq_config()
 }
 
 
+
 # ============================================================
 # Reset daily quota
 # ============================================================
@@ -332,45 +333,56 @@ iq_reset()
 
     . "$IQ_CONFIG_FILE"
 
-
     IQ_STATE_DATE=$(date '+%Y-%m-%d')
-    IQ_ACTIVE_TIME=0
-    IQ_BLOCKED=0
+    IQ_OLD_BLOCKED=0
 
-
+    # Read BLOCKED explicitly from the state file.
     if [ -f "$IQ_STATE_FILE" ]; then
-
-        IQ_OLD_STATE_DATE=""
-        IQ_OLD_ACTIVE_TIME=0
-        IQ_OLD_BLOCKED=0
-
-        . "$IQ_STATE_FILE"
-
-        if [ "$IQ_OLD_BLOCKED" -eq 1 ]; then
-            echo "Removing NoInternet policy from $MAC..."
-            ndmc -c "no ip hotspot host $MAC policy" >/dev/null 2>&1
-        fi
-    else
-        # Make sure the device is not blocked.
-        ndmc -c "no ip hotspot host $MAC policy" >/dev/null 2>&1
+        IQ_OLD_BLOCKED=$(awk -F= '$1 == "BLOCKED" {print $2; exit}' "$IQ_STATE_FILE")
     fi
 
+    case "$IQ_OLD_BLOCKED" in
+        1) ;;
+        *) IQ_OLD_BLOCKED=0 ;;
+    esac
 
+    # Remove the policy only if the state says the device
+    # was blocked by the quota service.
+    if [ "$IQ_OLD_BLOCKED" -eq 1 ]; then
+        echo "Removing NoInternet policy from $MAC..."
+
+        if ! ndmc -c "no ip hotspot host $MAC policy"; then
+            echo "ERROR: failed to remove NoInternet policy"
+            return 1
+        fi
+    fi
+
+    # Write reset state atomically.
     IQ_TMP_STATE="${IQ_STATE_FILE}.tmp"
 
-    {
+    if ! {
         echo "DATE=$IQ_STATE_DATE"
         echo "ACTIVE_TIME=0"
         echo "BLOCKED=0"
-    } > "$IQ_TMP_STATE"
+    } > "$IQ_TMP_STATE"; then
+        echo "ERROR: failed to write temporary state file"
+        rm -f "$IQ_TMP_STATE"
+        return 1
+    fi
 
-    mv "$IQ_TMP_STATE" "$IQ_STATE_FILE"
-
+    if ! mv "$IQ_TMP_STATE" "$IQ_STATE_FILE"; then
+        echo "ERROR: failed to replace state file"
+        rm -f "$IQ_TMP_STATE"
+        return 1
+    fi
 
     echo "Internet quota has been reset."
     echo "Active time : 00:00:00"
     echo "Remaining   : $(iq_format_time "$DAILY_LIMIT")"
+
+    return 0
 }
+
 
 
 # ============================================================
