@@ -151,7 +151,7 @@ if [ "${REQUEST_METHOD:-GET}" = "POST" ]; then
 
     # Redirect after POST to prevent duplicate submissions.
     echo "Status: 303 See Other"
-    echo "Location: /cgi-bin/index.sh?result=$RESULT"
+    echo "Location: index.sh?result=$RESULT"
     echo "Cache-Control: no-store"
     echo
     exit 0
@@ -499,22 +499,22 @@ cat <<HTML
         </table>
 
         <div class="actions">
-            <a class="button refresh" href="/cgi-bin/index.sh">Обновить</a>
+            <a class="button refresh" href="index.sh">Обновить</a>
 
-            <form method="post" action="/cgi-bin/index.sh" class="service-form">
+            <form method="post" action="index.sh" class="service-form">
                 <button class="button start" type="submit" name="action" value="service_start" $([ "$SERVICE_RUNNING" -eq 1 ] && printf 'disabled')>
                     Запустить службу
                 </button>
             </form>
 
-            <form method="post" action="/cgi-bin/index.sh" class="service-form"
+            <form method="post" action="index.sh" class="service-form"
                   onsubmit="return confirm('Остановить мониторинг квоты? Накопленное время сохранится, но автоматический контроль будет приостановлен.');">
                 <button class="button stop" type="submit" name="action" value="service_stop" $([ "$SERVICE_RUNNING" -eq 0 ] && printf 'disabled')>
                     Остановить службу
                 </button>
             </form>
 
-            <form method="post" action="/cgi-bin/index.sh"
+            <form method="post" action="index.sh"
                   onsubmit="return confirm('Сбросить использованное время за сегодня?');"
                   style="margin: 0; flex: 1 1 auto;">
                 <button class="button reset" type="submit" name="action" value="reset" style="width: 100%;">
@@ -522,7 +522,7 @@ cat <<HTML
                 </button>
             </form>
 
-            <form method="post" action="/cgi-bin/index.sh" class="limit-form">
+            <form method="post" action="index.sh" class="limit-form">
                 <input type="hidden" name="action" value="set_limit">
                 <label for="hours">Дневной лимит:</label>
                 <select id="hours" name="hours">
